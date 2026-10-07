@@ -1,0 +1,543 @@
+---
+title: "Nonlinear simulation: data generation and model evaluation"
+output: html_document
+---
+
+```{r}
+source("../../R/model_functions.R", local = TRUE)
+source("../../R/nonlinear_simulation_functions.R", local = TRUE)
+
+library(keras)
+library(glmnet)
+library(caret)
+library(MASS)
+library(tensorflow)
+library(randomForest)
+library(gbm)
+
+beta1=2
+replicate_ids <- seq_len(200)
+
+```
+
+```{r}
+results_df_best_new_med <- data.frame(
+  mse_main_model = numeric(),
+  mse_trans_combined = numeric(),
+  target_predictions = numeric(),
+  mse_optimized_model = numeric(),
+  mse_mean = numeric(),
+  mse_mean_rf = numeric(),
+  mse_initial = numeric(),
+  mse_combined = numeric(),
+  mse_target = numeric(),
+  mse_optimized = numeric(),
+  beta_initial_predictions = numeric(),
+  beta_combined_predictions = numeric(),
+  beta_target_predictions = numeric(),
+  beta_optimized_model_predictions = numeric(),
+  stringsAsFactors = FALSE
+)
+
+```
+
+```{r}
+Results_list_best_new_med <- list()
+```
+
+```{r}
+source_best_flags <- list()
+source_best_flags2 <- list()
+source_best_flags3 <- list()
+```
+
+```{r}
+for (i in replicate_ids) {
+
+  results <- simulate_and_calculate_variances()
+  D_train=as.matrix(results$D_training)
+  combined_training_data <- cbind(results$Z_training, results$X_training)
+  var(results$D_training)
+  var(results$D3)
+  var(results$D_given_ZX1)
+  var(results$D_training_givenZX)
+
+  model_result_source_lasso <- train_source_lasso_model(combined_training_data, D_train)
+  best_model_source_lasso <- model_result_source_lasso$model_source_lasso
+  lambda_source_lasso <- model_result_source_lasso$lambda_source_lasso
+  model_result_source_lasso$mse_train
+  model_result_source_lasso$variance_y_train
+
+  param_grid_gbm_source <- expand.grid(
+  n.trees = c(100, 500,1000),
+  interaction.depth = c(1,2,3, 5,10),
+  shrinkage = c(0.001, 0.01, 0.1,0.3)
+  )
+  model_result_source_gbm <- train_source_gbm_model(combined_training_data, D_train, param_grid_gbm_source)
+  best_model_source_gbm <- model_result_source_gbm$model_source_gbm
+  param_source_gmb <- model_result_source_gbm$best_parameters
+  model_result_source_gbm$mse_train
+  model_result_source_gbm$variance_y0
+
+  param_grid_nn_source <- expand.grid(
+    units = list(c(256, 128, 32, 8), c(128, 64, 16, 4), c(64, 32, 16), c(32, 8), c(64)),
+    dropout_rate = c(0.1, 0.3),
+    l2_rate = c(0.001),
+    patience = c(20),
+    optimizer = c('adam')
+  )
+
+  model_result_nn <- grid_search_best_model(param_grid_nn_source, combined_training_data, D_train)
+  best_model_source_nn = model_result_nn$best_model
+  model_result_nn$best_val_loss
+
+  param_grid_rf_source <- expand.grid(
+    ntree = c(100, 500, 1000),
+    mtry = c(5,7),
+    nodesize = c(5, 10),
+    maxnodes = 1000
+  )
+
+  model_result_rf <- train_source_rf_model(combined_training_data, D_train, param_grid_rf_source)
+  best_model_source_rf = model_result_rf$model_source_rf
+  model_result_rf$mse_train
+  model_result_rf$variance_y0
+
+  param_grid_rf_residual <- expand.grid(
+    ntree = c(100, 200),
+    mtry = c(3, 5),
+    nodesize = c(1, 5),
+    maxnodes = c(100, 500)
+  )
+
+  param_grid_gbm_transfer <- expand.grid(
+    n.trees = c(50, 100, 200),
+    interaction.depth = c(3, 5),
+    shrinkage = c(0.01, 0.1)
+  )
+
+  param_grid_gbm_target <- expand.grid(
+    n.trees = c(50, 100, 200),
+    interaction.depth = c(3, 5),
+    shrinkage = c(0.01, 0.1)
+  )
+
+  param_grid_rf_target <- expand.grid(
+    ntree = c(100, 200),
+    mtry = c(3, 5),
+    nodesize = c(1, 5),
+    maxnodes = c(100, 500)
+  )
+
+  predictions_result1 <- process_vs_return_predict_list(
+    x0 = cbind(results$Z_test_1, results$X_test_1),
+    y0 = results$D_test_1,
+    combined_testing_data = cbind(results$Z_test_1, results$X_test_1),
+    combined_testing_y = results$D_test_1,
+    final_testing_data <- cbind(results$Z1, results$X1),
+    actuals <- results$D1,
+    best_model_source_lasso = best_model_source_lasso,
+    lambda_source_lasso = lambda_source_lasso,
+    best_model_source_nn = best_model_source_nn,
+    best_model_source_rf = best_model_source_rf,
+    best_model_source_gbm = best_model_source_gbm,
+    model_result_source_gbm = model_result_source_gbm,
+    i = i,
+    param_grid_rf_residual = expand.grid(ntree = c(100, 200), mtry = c(3, 5), nodesize = c(1, 5), maxnodes = c(100, 500)),
+    param_grid_gbm_transfer = expand.grid(n.trees = c(50, 100, 200), interaction.depth = c(3, 5), shrinkage = c(0.01, 0.1)),
+    param_grid_gbm_target = expand.grid(n.trees = c(50, 100, 200), interaction.depth = c(3, 5), shrinkage = c(0.01, 0.1)),
+    param_grid_rf_target = expand.grid(ntree = c(100, 200), mtry = c(3, 5), nodesize = c(1, 5), maxnodes = c(100, 500))
+  )
+
+  predictions_list1 <- list(
+    initial_predictions = predictions_result1$predictions_list$initial_predictions,
+    initial_predictions_nn = predictions_result1$predictions_list$initial_predictions_nn,
+    initial_predictions_gbm = predictions_result1$predictions_list$initial_predictions_gbm,
+    initial_predictions_lasso = predictions_result1$predictions_list$initial_predictions_lasso,
+    initial_predictions_rf = predictions_result1$predictions_list$initial_predictions_rf,
+    combined_predictions = predictions_result1$predictions_list$combined_predictions,
+    combined_predictions2 = predictions_result1$predictions_list$combined_predictions2,
+    combined_predictions3 = predictions_result1$predictions_list$combined_predictions3,
+    combined_predictions4 = predictions_result1$predictions_list$combined_predictions4,
+    combined_predictions5 = predictions_result1$predictions_list$combined_predictions5,
+    rf_predictions = predictions_result1$predictions_list$rf_predictions,
+    gbm_predictions = predictions_result1$predictions_list$gbm_predictions,
+    target_predictions =  predictions_result1$predictions_list$target_predictions
+  )
+
+  source_best_flags[[i]] <- predictions_result1$source_best_flagreturn
+
+  predictions_result2 <- process_vs_return_predict_list(
+    x0 = cbind(results$Z_test_2, results$X_test_2),
+    y0 = results$D_test_2,
+    combined_testing_data = cbind(results$Z_test_2, results$X_test_2),
+    combined_testing_y = results$D_test_2,
+    final_testing_data <- cbind(results$Z2, results$X2),
+    actuals <- results$D1,
+    best_model_source_lasso = best_model_source_lasso,
+    lambda_source_lasso = lambda_source_lasso,
+    best_model_source_nn = best_model_source_nn,
+    best_model_source_rf = best_model_source_rf,
+    best_model_source_gbm = best_model_source_gbm,
+    model_result_source_gbm = model_result_source_gbm,
+    i = i,
+    param_grid_rf_residual = expand.grid(ntree = c(100, 200), mtry = c(3, 5), nodesize = c(1, 5), maxnodes = c(100, 500)),
+    param_grid_gbm_transfer = expand.grid(n.trees = c(50, 100, 200), interaction.depth = c(3, 5), shrinkage = c(0.01, 0.1)),
+    param_grid_gbm_target = expand.grid(n.trees = c(50, 100, 200), interaction.depth = c(3, 5), shrinkage = c(0.01, 0.1)),
+    param_grid_rf_target = expand.grid(ntree = c(100, 200), mtry = c(3, 5), nodesize = c(1, 5), maxnodes = c(100, 500))
+  )
+
+  predictions_list2 <- list(
+    initial_predictions = predictions_result2$predictions_list$initial_predictions,
+    initial_predictions_nn = predictions_result2$predictions_list$initial_predictions_nn,
+    initial_predictions_gbm = predictions_result2$predictions_list$initial_predictions_gbm,
+    initial_predictions_lasso = predictions_result2$predictions_list$initial_predictions_lasso,
+    initial_predictions_rf = predictions_result2$predictions_list$initial_predictions_rf,
+    combined_predictions = predictions_result2$predictions_list$combined_predictions,
+    combined_predictions2 = predictions_result2$predictions_list$combined_predictions2,
+    combined_predictions3 = predictions_result2$predictions_list$combined_predictions3,
+    combined_predictions4 = predictions_result2$predictions_list$combined_predictions4,
+    combined_predictions5 = predictions_result2$predictions_list$combined_predictions5,
+    rf_predictions = predictions_result2$predictions_list$rf_predictions,
+    gbm_predictions = predictions_result2$predictions_list$gbm_predictions,
+    target_predictions =  predictions_result2$predictions_list$target_predictions
+  )
+  source_best_flags2[[i]] <- predictions_result2$source_best_flagreturn
+
+  predictions_result3 <- process_vs_return_predict_list(
+    x0 = cbind(results$Z_test_3, results$X_test_3),
+    y0 = results$D_test_3,
+    combined_testing_data = cbind(results$Z_test_3, results$X_test_3),
+    combined_testing_y = results$D_test_3,
+    final_testing_data <- cbind(results$Z3, results$X3),
+    actuals <- results$D3,
+    best_model_source_lasso = best_model_source_lasso,
+    lambda_source_lasso = lambda_source_lasso,
+    best_model_source_nn = best_model_source_nn,
+    best_model_source_rf = best_model_source_rf,
+    best_model_source_gbm = best_model_source_gbm,
+    model_result_source_gbm = model_result_source_gbm,
+    i = i,
+    param_grid_rf_residual = expand.grid(ntree = c(100, 200), mtry = c(3, 5), nodesize = c(1, 5), maxnodes = c(100, 500)),
+    param_grid_gbm_transfer = expand.grid(n.trees = c(50, 100, 200), interaction.depth = c(3, 5), shrinkage = c(0.01, 0.1)),
+    param_grid_gbm_target = expand.grid(n.trees = c(50, 100, 200), interaction.depth = c(3, 5), shrinkage = c(0.01, 0.1)),
+    param_grid_rf_target = expand.grid(ntree = c(100, 200), mtry = c(3, 5), nodesize = c(1, 5), maxnodes = c(100, 500))
+  )
+
+  predictions_list3 <- list(
+    initial_predictions = predictions_result3$predictions_list$initial_predictions,
+    initial_predictions_nn = predictions_result3$predictions_list$initial_predictions_nn,
+    initial_predictions_gbm = predictions_result3$predictions_list$initial_predictions_gbm,
+    initial_predictions_lasso = predictions_result3$predictions_list$initial_predictions_lasso,
+    initial_predictions_rf = predictions_result3$predictions_list$initial_predictions_rf,
+    combined_predictions = predictions_result3$predictions_list$combined_predictions,
+    combined_predictions2 = predictions_result3$predictions_list$combined_predictions2,
+    combined_predictions3 = predictions_result3$predictions_list$combined_predictions3,
+    combined_predictions4 = predictions_result3$predictions_list$combined_predictions4,
+    combined_predictions5 = predictions_result3$predictions_list$combined_predictions5,
+    rf_predictions = predictions_result3$predictions_list$rf_predictions,
+    gbm_predictions = predictions_result3$predictions_list$gbm_predictions,
+    target_predictions =  predictions_result3$predictions_list$target_predictions
+  )
+
+  source_best_flags3[[i]] <- predictions_result3$source_best_flagreturn
+  result1 <- calculate_mse_mae(predictions_list1, results$D1)
+  result2 <- calculate_mse_mae(predictions_list2, results$D2)
+  result3 <- calculate_mse_mae(predictions_list3, results$D3)
+
+  mse_main_model1 <- result1$mse_values["initial"]
+  mse_main_model1_nn <- result1$mse_values["initial_nn"]
+  mse_main_model1_rf <- result1$mse_values["initial_rf"]
+  mse_main_model1_gbm <- result1$mse_values["initial_gbm"]
+  mse_main_model1_lasso <- result1$mse_values["initial_lasso"]
+  mse_trans_combined11 <- result1$mse_values["combined"]
+  mse_trans_combined12 <- result1$mse_values["combined2"]
+  mse_trans_combined13 <- result1$mse_values["combined3"]
+  mse_trans_combined14 <- result1$mse_values["combined4"]
+  mse_trans_combined15 <- result1$mse_values["combined5"]
+  mse_target_model1 <- result1$mse_values["target"]
+
+  mse_rf1 <- result1$mse_values["rf"]
+  mse_gbm1 <- result1$mse_values["gbm"]
+  mse_mean1 <- result1$mse_mean
+
+  mse_main_model2 <- result2$mse_values["initial"]
+  mse_main_model2_nn <- result2$mse_values["initial_nn"]
+  mse_main_model2_rf <- result2$mse_values["initial_rf"]
+  mse_main_model2_gbm <- result2$mse_values["initial_gbm"]
+  mse_main_model2_lasso <- result2$mse_values["initial_lasso"]
+  mse_trans_combined21 <- result2$mse_values["combined"]
+  mse_trans_combined22 <- result2$mse_values["combined2"]
+  mse_trans_combined23 <- result2$mse_values["combined3"]
+  mse_trans_combined24 <- result2$mse_values["combined4"]
+  mse_trans_combined25 <- result2$mse_values["combined5"]
+  mse_target_model2 <- result2$mse_values["target"]
+
+  mse_rf2 <- result2$mse_values["rf"]
+  mse_gbm2 <- result2$mse_values["gbm"]
+  mse_mean2 <- result2$mse_mean
+
+  mse_main_model3 <- result3$mse_values["initial"]
+  mse_main_model3_nn <- result3$mse_values["initial_nn"]
+  mse_main_model3_rf <- result3$mse_values["initial_rf"]
+  mse_main_model3_gbm <- result3$mse_values["initial_gbm"]
+  mse_main_model3_lasso <- result3$mse_values["initial_lasso"]
+  mse_trans_combined31 <- result3$mse_values["combined"]
+  mse_trans_combined32 <- result3$mse_values["combined2"]
+  mse_trans_combined33 <- result3$mse_values["combined3"]
+  mse_trans_combined34 <- result3$mse_values["combined4"]
+  mse_trans_combined35 <- result3$mse_values["combined5"]
+  mse_target_model3 <- result3$mse_values["target"]
+
+  mse_rf3 <- result3$mse_values["rf"]
+  mse_gbm3 <- result3$mse_values["gbm"]
+  mse_mean3 <- result3$mse_mean
+
+  mse_main_model <- mean(c(mse_main_model1, mse_main_model2, mse_main_model3))
+  mse_main_model_nn <- mean(c(mse_main_model1_nn, mse_main_model2_nn, mse_main_model3_nn))
+  mse_main_model_rf <- mean(c(mse_main_model1_rf, mse_main_model2_rf, mse_main_model3_rf))
+  mse_main_model_lasso <- mean(c(mse_main_model1_lasso, mse_main_model2_lasso, mse_main_model3_lasso))
+  mse_main_model_gbm <- mean(c(mse_main_model1_gbm, mse_main_model2_gbm, mse_main_model3_gbm))
+  mse_trans_combined1 <- mean(c(mse_trans_combined11, mse_trans_combined21, mse_trans_combined31))
+  mse_trans_combined2 <- mean(c(mse_trans_combined12, mse_trans_combined22, mse_trans_combined32))
+  mse_trans_combined3 <- mean(c(mse_trans_combined13, mse_trans_combined23, mse_trans_combined33))
+  mse_trans_combined4 <- mean(c(mse_trans_combined14, mse_trans_combined24, mse_trans_combined34))
+  mse_trans_combined5 <- mean(c(mse_trans_combined15, mse_trans_combined25, mse_trans_combined35))
+  mse_target_model <- mean(c(mse_target_model1, mse_target_model2, mse_target_model3))
+  mse_rf <- mean(c(mse_rf1, mse_rf2, mse_rf3))
+  mse_gbm <- mean(c(mse_gbm1, mse_gbm2, mse_gbm3))
+  mse_mean <- mean(c(mse_mean1, mse_mean2, mse_mean3))
+
+  results_final1 <- calculate_regression_coefficients_and_mse(predictions_list1, results$D1, results$Y1, true_coefficient = 2)
+  results_final2 <- calculate_regression_coefficients_and_mse(predictions_list2, results$D2, results$Y2, true_coefficient = 2)
+  results_final3 <- calculate_regression_coefficients_and_mse(predictions_list3, results$D3, results$Y3, true_coefficient = 2)
+
+  beta_ols1<-results_final1$beta_coefficients["actuals_D"]
+  beta_initial_predictions1 <- results_final1$beta_coefficients["weighted_initial_predictions"]
+  beta_initial_predictions1_nn <- results_final1$beta_coefficients["weighted_initial_predictions_nn"]
+  beta_initial_predictions1_gbm <- results_final1$beta_coefficients["weighted_initial_predictions_gbm"]
+  beta_initial_predictions1_rf <- results_final1$beta_coefficients["weighted_initial_predictions_rf"]
+  beta_initial_predictions1_lasso <- results_final1$beta_coefficients["weighted_initial_predictions_lasso"]
+  beta_combined_predictions11 <- results_final1$beta_coefficients["weighted_combined_predictions1"]
+  beta_combined_predictions12 <- results_final1$beta_coefficients["weighted_combined_predictions2"]
+  beta_combined_predictions13 <- results_final1$beta_coefficients["weighted_combined_predictions3"]
+  beta_combined_predictions14 <- results_final1$beta_coefficients["weighted_combined_predictions4"]
+  beta_combined_predictions15 <- results_final1$beta_coefficients["weighted_combined_predictions5"]
+  beta_target_predictions11 <- results_final1$beta_coefficients["weighted_target_predictions"]
+  beta_target_predictions12 <- results_final1$beta_coefficients["weighted_target_predictions2"]
+  beta_target_predictions13 <- results_final1$beta_coefficients["weighted_target_predictions3"]
+  mse_ols1<-  results_final1$mse_values["ols.actuals_D"]
+  mse_initial1 <- results_final1$mse_values["initial.weighted_initial_predictions"]
+  mse_initial1_nn <- results_final1$mse_values["initial_nn.weighted_initial_predictions_nn"]
+  mse_initial1_rf <- results_final1$mse_values["initial_rf.weighted_initial_predictions_rf"]
+  mse_initial1_gbm <- results_final1$mse_values["initial_gbm.weighted_initial_predictions_gbm"]
+  mse_initial1_lasso <- results_final1$mse_values["initial_lasso.weighted_initial_predictions_lasso"]
+  mse_combined11 <- results_final1$mse_values["combined1.weighted_combined_predictions1"]
+  mse_combined12 <- results_final1$mse_values["combined2.weighted_combined_predictions2"]
+  mse_combined13 <- results_final1$mse_values["combined3.weighted_combined_predictions3"]
+  mse_combined14 <- results_final1$mse_values["combined4.weighted_combined_predictions4"]
+  mse_combined15 <- results_final1$mse_values["combined5.weighted_combined_predictions5"]
+  mse_target11 <- results_final1$mse_values["target.weighted_target_predictions"]
+  mse_target12 <- results_final1$mse_values["target2.weighted_target_predictions2"]
+  mse_target13 <- results_final1$mse_values["target3.weighted_target_predictions3"]
+
+  beta_ols2<-results_final2$beta_coefficients["actuals_D"]
+  beta_initial_predictions2 <- results_final2$beta_coefficients["weighted_initial_predictions"]
+  beta_initial_predictions2_nn <- results_final2$beta_coefficients["weighted_initial_predictions_nn"]
+  beta_initial_predictions2_gbm <- results_final2$beta_coefficients["weighted_initial_predictions_gbm"]
+  beta_initial_predictions2_rf <- results_final2$beta_coefficients["weighted_initial_predictions_rf"]
+  beta_initial_predictions2_lasso <- results_final2$beta_coefficients["weighted_initial_predictions_lasso"]
+  beta_combined_predictions21 <- results_final2$beta_coefficients["weighted_combined_predictions1"]
+  beta_combined_predictions22 <- results_final2$beta_coefficients["weighted_combined_predictions2"]
+  beta_combined_predictions23 <- results_final2$beta_coefficients["weighted_combined_predictions3"]
+  beta_combined_predictions24 <- results_final2$beta_coefficients["weighted_combined_predictions4"]
+  beta_combined_predictions25 <- results_final2$beta_coefficients["weighted_combined_predictions5"]
+  beta_target_predictions21 <- results_final2$beta_coefficients["weighted_target_predictions"]
+  beta_target_predictions22 <- results_final2$beta_coefficients["weighted_target_predictions2"]
+  beta_target_predictions23 <- results_final2$beta_coefficients["weighted_target_predictions3"]
+  mse_ols2<-  results_final2$mse_values["ols.actuals_D"]
+  mse_initial2 <- results_final2$mse_values["initial.weighted_initial_predictions"]
+  mse_initial2_nn <- results_final2$mse_values["initial_nn.weighted_initial_predictions_nn"]
+  mse_initial2_gbm <- results_final2$mse_values["initial_gbm.weighted_initial_predictions_gbm"]
+  mse_initial2_rf <- results_final2$mse_values["initial_rf.weighted_initial_predictions_rf"]
+  mse_initial2_lasso <- results_final2$mse_values["initial_lasso.weighted_initial_predictions_lasso"]
+  mse_combined21 <- results_final2$mse_values["combined1.weighted_combined_predictions1"]
+  mse_combined22 <- results_final2$mse_values["combined2.weighted_combined_predictions2"]
+  mse_combined23 <- results_final2$mse_values["combined3.weighted_combined_predictions3"]
+  mse_combined24 <- results_final2$mse_values["combined4.weighted_combined_predictions4"]
+  mse_combined25 <- results_final2$mse_values["combined5.weighted_combined_predictions5"]
+  mse_target21 <- results_final2$mse_values["target.weighted_target_predictions"]
+  mse_target22 <- results_final2$mse_values["target2.weighted_target_predictions2"]
+  mse_target23 <- results_final2$mse_values["target3.weighted_target_predictions3"]
+
+  beta_ols3<-results_final3$beta_coefficients["actuals_D"]
+  beta_initial_predictions3 <- results_final3$beta_coefficients["weighted_initial_predictions"]
+  beta_initial_predictions3_nn <- results_final3$beta_coefficients["weighted_initial_predictions_nn"]
+  beta_initial_predictions3_gbm <- results_final3$beta_coefficients["weighted_initial_predictions_gbm"]
+  beta_initial_predictions3_rf <- results_final3$beta_coefficients["weighted_initial_predictions_rf"]
+  beta_initial_predictions3_lasso <- results_final3$beta_coefficients["weighted_initial_predictions_lasso"]
+  beta_combined_predictions31 <- results_final3$beta_coefficients["weighted_combined_predictions1"]
+  beta_combined_predictions32 <- results_final3$beta_coefficients["weighted_combined_predictions2"]
+  beta_combined_predictions33 <- results_final3$beta_coefficients["weighted_combined_predictions3"]
+  beta_combined_predictions34 <- results_final3$beta_coefficients["weighted_combined_predictions4"]
+  beta_combined_predictions35 <- results_final3$beta_coefficients["weighted_combined_predictions5"]
+  beta_target_predictions31 <- results_final3$beta_coefficients["weighted_target_predictions"]
+  beta_target_predictions32 <- results_final3$beta_coefficients["weighted_target_predictions2"]
+  beta_target_predictions33 <- results_final3$beta_coefficients["weighted_target_predictions3"]
+  mse_ols3<-  results_final3$mse_values["ols.actuals_D"]
+  mse_initial3 <- results_final3$mse_values["initial.weighted_initial_predictions"]
+  mse_initial3_nn <- results_final3$mse_values["initial_nn.weighted_initial_predictions_nn"]
+  mse_initial3_rf <- results_final3$mse_values["initial_rf.weighted_initial_predictions_rf"]
+  mse_initial3_gbm <- results_final3$mse_values["initial_gbm.weighted_initial_predictions_gbm"]
+  mse_initial3_lasso <- results_final3$mse_values["initial_lasso.weighted_initial_predictions_lasso"]
+  mse_combined31 <- results_final3$mse_values["combined1.weighted_combined_predictions1"]
+  mse_combined32 <- results_final3$mse_values["combined2.weighted_combined_predictions2"]
+  mse_combined33 <- results_final3$mse_values["combined3.weighted_combined_predictions3"]
+  mse_combined34 <- results_final3$mse_values["combined4.weighted_combined_predictions4"]
+  mse_combined35 <- results_final3$mse_values["combined5.weighted_combined_predictions5"]
+  mse_target31 <- results_final3$mse_values["target.weighted_target_predictions"]
+  mse_target32 <- results_final3$mse_values["target2.weighted_target_predictions2"]
+  mse_target33 <- results_final3$mse_values["target3.weighted_target_predictions3"]
+
+  beta_ols_mean <-mean(c(beta_ols1, beta_ols2, beta_ols3))
+  beta_initial_predictions <- mean(c(beta_initial_predictions1, beta_initial_predictions2, beta_initial_predictions3))
+  beta_initial_predictions_nn <- mean(c(beta_initial_predictions1_nn, beta_initial_predictions2_nn, beta_initial_predictions3_nn))
+  beta_initial_predictions_gbm <- mean(c(beta_initial_predictions1_gbm, beta_initial_predictions2_gbm, beta_initial_predictions3_gbm))
+  beta_initial_predictions_rf <- mean(c(beta_initial_predictions1_rf, beta_initial_predictions2_rf, beta_initial_predictions3_rf))
+  beta_initial_predictions_lasso <- mean(c(beta_initial_predictions1_lasso, beta_initial_predictions2_lasso, beta_initial_predictions3_lasso))
+  beta_combined_predictions1 <- mean(c(beta_combined_predictions11, beta_combined_predictions21, beta_combined_predictions31))
+  beta_combined_predictions2 <- mean(c(beta_combined_predictions12, beta_combined_predictions22, beta_combined_predictions32))
+  beta_combined_predictions3 <- mean(c(beta_combined_predictions13, beta_combined_predictions23, beta_combined_predictions33))
+  beta_combined_predictions4 <- mean(c(beta_combined_predictions14, beta_combined_predictions24, beta_combined_predictions34))
+  beta_combined_predictions5 <- mean(c(beta_combined_predictions15, beta_combined_predictions25, beta_combined_predictions35))
+  beta_target_predictions1 <- mean(c(beta_target_predictions11, beta_target_predictions21, beta_target_predictions31))
+  beta_target_predictions2 <- mean(c(beta_target_predictions12, beta_target_predictions22, beta_target_predictions32))
+  beta_target_predictions3 <- mean(c(beta_target_predictions13, beta_target_predictions23, beta_target_predictions33))
+  mse_ols <- mean(c(mse_ols1, mse_ols2, mse_ols3))
+  mse_initial <- mean(c(mse_initial1, mse_initial2, mse_initial3))
+  mse_initial_nn <- mean(c(mse_initial1_nn, mse_initial2_nn, mse_initial3_nn))
+  mse_initial_gbm <- mean(c(mse_initial1_gbm, mse_initial2_gbm, mse_initial3_gbm))
+  mse_initial_rf <- mean(c(mse_initial1_rf, mse_initial2_rf, mse_initial3_rf))
+  mse_initial_lasso <- mean(c(mse_initial1_lasso, mse_initial2_lasso, mse_initial3_lasso))
+  mse_combined1 <- mean(c(mse_combined11, mse_combined21, mse_combined31))
+  mse_combined2 <- mean(c(mse_combined12, mse_combined22, mse_combined32))
+  mse_combined3 <- mean(c(mse_combined13, mse_combined23, mse_combined33))
+  mse_combined4 <- mean(c(mse_combined14, mse_combined24, mse_combined34))
+  mse_combined5 <- mean(c(mse_combined15, mse_combined25, mse_combined35))
+  mse_target1 <- mean(c(mse_target11, mse_target21, mse_target31))
+  mse_target2 <- mean(c(mse_target12, mse_target22, mse_target32))
+  mse_target3 <- mean(c(mse_target13, mse_target23, mse_target33))
+
+  results_df_best_new_med <- rbind(results_df_best_new_med, data.frame(
+    mse_main_model = mse_main_model,
+    mse_main_model_nn = mse_main_model_nn,
+    mse_main_model_gbm = mse_main_model_gbm,
+    mse_main_model_lasso = mse_main_model_lasso,
+    mse_main_model_rf = mse_main_model_rf,
+    mse_trans_combined1 = mse_trans_combined1,
+    mse_trans_combined2 = mse_trans_combined2,
+    mse_trans_combined3 = mse_trans_combined3,
+    mse_trans_combined4 = mse_trans_combined4,
+    mse_trans_combined5 = mse_trans_combined5,
+    target_predictions = mse_target_model,
+    mse_mean = mse_mean,
+    mse_mean_gbm = mse_gbm,
+    mse_mean_rf = mse_rf,
+    mse_ols = mse_ols,
+    mse_initial = mse_initial,
+    mse_initial_nn = mse_initial_nn,
+    mse_initial_gbm = mse_initial_gbm,
+    mse_initial_rf = mse_initial_rf,
+    mse_initial_lasso = mse_initial_lasso,
+    mse_combined1 = mse_combined1,
+    mse_combined2 = mse_combined2,
+    mse_combined3 = mse_combined3,
+    mse_combined4 = mse_combined4,
+    mse_combined5 = mse_combined5,
+    mse_target1 = mse_target1,
+    mse_target2 = mse_target2,
+    mse_target3 = mse_target3,
+    beta_ols_mean = beta_ols_mean,
+    beta_initial_predictions = beta_initial_predictions,
+    beta_combined_predictions1 = beta_combined_predictions1,
+    beta_combined_predictions2 = beta_combined_predictions2,
+    beta_combined_predictions3 = beta_combined_predictions3,
+    beta_combined_predictions4 = beta_combined_predictions4,
+    beta_combined_predictions5 = beta_combined_predictions5,
+    beta_target_predictions1 = beta_target_predictions1,
+    beta_target_predictions2 = beta_target_predictions2,
+    beta_target_predictions3 = beta_target_predictions3
+  ))
+
+  iteration_results_best_near <- list(
+  D = c(unlist(results$D1), unlist(results$D2), unlist(results$D3)),
+  D_given_ZX = c(unlist(results$D_given_ZX1), unlist(results$D_given_ZX2), unlist(results$D_given_ZX3)),
+  Y = c(unlist(results$Y1), unlist(results$Y2), unlist(results$Y3)),
+  InitialPredictions = c(unlist(predictions_list1$initial_predictions), unlist(predictions_list2$initial_predictions), unlist(predictions_list3$initial_predictions)),
+  InitialPredictions_nn = c(unlist(predictions_list1$initial_predictions_nn), unlist(predictions_list2$initial_predictions_nn), unlist(predictions_list3$initial_predictions_nn)),
+  InitialPredictions_rf = c(unlist(predictions_list1$initial_predictions_rf), unlist(predictions_list2$initial_predictions_rf), unlist(predictions_list3$initial_predictions_rf)),
+  InitialPredictions_gbm = c(unlist(predictions_list1$initial_predictions_gbm), unlist(predictions_list2$initial_predictions_gbm), unlist(predictions_list3$initial_predictions_gbm)),
+  InitialPredictions_lasso = c(unlist(predictions_list1$initial_predictions_lasso), unlist(predictions_list2$initial_predictions_lasso), unlist(predictions_list3$initial_predictions_lasso)),
+
+  CombinedPredictions1 = c(unlist(predictions_list1$combined_predictions), unlist(predictions_list2$combined_predictions), unlist(predictions_list3$combined_predictions)),
+  CombinedPredictions2 = c(unlist(predictions_list1$combined_predictions2), unlist(predictions_list2$combined_predictions2), unlist(predictions_list3$combined_predictions2)),
+  CombinedPredictions3 = c(unlist(predictions_list1$combined_predictions3), unlist(predictions_list2$combined_predictions3), unlist(predictions_list3$combined_predictions3)),
+  CombinedPredictions4 = c(unlist(predictions_list1$combined_predictions4), unlist(predictions_list2$combined_predictions4), unlist(predictions_list3$combined_predictions4)),
+  CombinedPredictions5 = c(unlist(predictions_list1$combined_predictions5), unlist(predictions_list2$combined_predictions5), unlist(predictions_list3$combined_predictions5)),
+  TargetPredictions = c(unlist(predictions_list1$target_predictions), unlist(predictions_list2$target_predictions), unlist(predictions_list3$target_predictions)),
+  GBMPredictions = c(unlist(predictions_list1$gbm_predictions), unlist(predictions_list2$gbm_predictions), unlist(predictions_list3$gbm_predictions)),
+  RFPredictions = c(unlist(predictions_list1$rf_predictions), unlist(predictions_list2$rf_predictions), unlist(predictions_list3$rf_predictions)),
+  Z1 = c(unlist(results$Z1[, 1]), unlist(results$Z2[, 1]), unlist(results$Z3[, 1])),
+  Z2 = c(unlist(results$Z1[, 2]), unlist(results$Z2[, 2]), unlist(results$Z3[, 2])),
+  Z3 = c(unlist(results$Z1[, 3]), unlist(results$Z2[, 3]), unlist(results$Z3[, 3])),
+  Z4 = c(unlist(results$Z1[, 4]), unlist(results$Z2[, 4]), unlist(results$Z3[, 4])),
+  Z5 = c(unlist(results$Z1[, 5]), unlist(results$Z2[, 5]), unlist(results$Z3[, 5])),
+  Z6 = c(unlist(results$Z1[, 6]), unlist(results$Z2[, 6]), unlist(results$Z3[, 6])),
+  Z7 = c(unlist(results$Z1[, 7]), unlist(results$Z2[, 7]), unlist(results$Z3[, 7])),
+  Z8 = c(unlist(results$Z1[, 8]), unlist(results$Z2[, 8]), unlist(results$Z3[, 8])),
+  Z9 = c(unlist(results$Z1[, 9]), unlist(results$Z2[, 9]), unlist(results$Z3[, 9])),
+  Z10 = c(unlist(results$Z1[, 10]), unlist(results$Z2[, 10]), unlist(results$Z3[, 10])),
+  Z11 = c(unlist(results$Z1[, 11]), unlist(results$Z2[, 11]), unlist(results$Z3[, 11])),
+  Z12 = c(unlist(results$Z1[, 12]), unlist(results$Z2[, 12]), unlist(results$Z3[, 12])),
+  Z13 = c(unlist(results$Z1[, 13]), unlist(results$Z2[, 13]), unlist(results$Z3[, 13])),
+  Z14 = c(unlist(results$Z1[, 14]), unlist(results$Z2[, 14]), unlist(results$Z3[, 14])),
+  X1 = c(unlist(results$X1[, 1]), unlist(results$X2[, 1]), unlist(results$X3[, 1])),
+  X2 = c(unlist(results$X1[, 2]), unlist(results$X2[, 2]), unlist(results$X3[, 2])),
+  X3 = c(unlist(results$X1[, 3]), unlist(results$X2[, 3]), unlist(results$X3[, 3])),
+  X4 = c(unlist(results$X1[, 4]), unlist(results$X2[, 4]), unlist(results$X3[, 4])),
+  X5 = c(unlist(results$X1[, 5]), unlist(results$X2[, 5]), unlist(results$X3[, 5]))
+)
+
+  Results_list_best_new_med[[i]] <- iteration_results_best_near
+  print("i")
+  print(i)
+}
+```
+
+```{r save-results}
+write.csv(results_df_best_new_med, "model_evaluation_results_nonlinear.csv", row.names = FALSE)
+save(Results_list_best_new_med, file = "nonlinear_new.Rdata")
+```
+
+```{r}
+library(ggplot2)
+
+f_values <- numeric(length(Results_list_best_new_med))
+
+for (i in seq_along(Results_list_best_new_med)) {
+
+  data_df <- Results_list_best_new_med[[i]]
+
+  first_stage <- lm(D ~ TargetPredictions, data = data_df)
+
+  summary_first_stage <- summary(first_stage)
+
+  f_values[i] <- summary_first_stage$fstatistic[1] / summary_first_stage$fstatistic[2]
+}
+
+print(f_values)
+
+ggplot(data = data.frame(f_values), aes(x = f_values)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(x = "F-statistic values", y = "Frequency", title = "Histogram of F-statistic values")
+```
