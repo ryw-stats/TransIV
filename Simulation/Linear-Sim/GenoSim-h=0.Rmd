@@ -1,0 +1,100 @@
+---
+title: "IV Test and ML New Start"
+output: html_document
+---
+
+```{r}
+source("../../R/model_functions.R", local = TRUE)
+source("../../R/linear_simulation_functions.R", local = TRUE)
+
+library(glmnet)
+library(MASS)
+library(withr)
+```
+
+```{r}
+load("SimData_AF.Rdata")
+```
+
+```{r}
+load("SimData_EU.Rdata")
+```
+
+```{r}
+selected_variable_names = colnames(G_eu)
+
+top_variable_names <- selected_variable_names[1:min(2000, length(selected_variable_names))]
+
+selected_data_eu <- G_eu[, top_variable_names]
+
+```
+
+```{r}
+
+if (all(top_variable_names %in% colnames(G_af))) {
+
+    selected_data_af <- G_af[, top_variable_names]
+} else {
+    print("Some variables in top_variable_names are not present in G_af")
+}
+
+```
+
+```{r}
+set.seed(-1)
+part1 <- rnorm(20, 0, sqrt(1.5/20))
+
+part2 <- rnorm(80, 0, sqrt(0.05/80))
+
+```
+
+```{r}
+random_vector <- c(part1, part2)
+random_vector
+```
+
+```{r}
+
+beta1=0.5
+
+```
+
+```{r}
+results_df_best_new_near<- data.frame(
+  mse_main_model = numeric(),
+  mse_trans_combined = numeric(),
+  target_predictions = numeric(),
+  mse_optimized_model = numeric(),
+  mse_mean = numeric(),
+  mse_mean_rf = numeric(),
+  mse_initial = numeric(),
+  mse_combined = numeric(),
+  mse_target = numeric(),
+  mse_optimized = numeric(),
+  beta_initial_predictions = numeric(),
+  beta_combined_predictions = numeric(),
+  beta_target_predictions = numeric(),
+  beta_optimized_model_predictions = numeric(),
+  stringsAsFactors = FALSE
+)
+
+```
+
+```{r}
+Results_list_best_new_near <- list()
+```
+
+```{r}
+
+library(parallel)
+Results_list_best_new_near <- mclapply(1:200, run_linear_simulation,
+  selected_data_eu = selected_data_eu, selected_data_af = selected_data_af,
+  random_vector = random_vector, near_weight = 1,
+  results_template = results_df_best_new_near,
+  mc.cores = if (.Platform$OS.type == "windows") 1L else 20L)
+```
+
+```{r}
+
+save(Results_list_best_new_near, file = "model_results_1.Rdata")
+```
