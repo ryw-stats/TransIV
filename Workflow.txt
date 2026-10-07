@@ -1,0 +1,193 @@
+TransIV execution workflow
+==========================
+
+The commands below are R console commands. Start in Code/ in a fresh R
+session with the dependencies in Readme.txt. From the project root, run
+setwd("Code") once. Use source("path/to/script.R", chdir = TRUE) so data and
+helper paths resolve from the script's own directory. For Rscript or selected
+RStudio lines, first set the working directory to that script's directory.
+
+Choose one branch:
+  Linear simulation:     sections 1 -> 2.
+  Nonlinear simulation:  section 3 only.
+  Debiasing simulation:  section 4 only.
+  Real-data analysis:    section 5, repeated for each target population.
+
+Notebook rendering executes the full analysis. Prepare its inputs and review
+the worker settings before running it. Existing output files with the same
+names will be overwritten.
+
+Entry scripts source their shared functions automatically. For direct helper
+use, source R/model_functions.R followed by the appropriate simulation module;
+source R/iv_functions.R for IV objectives and trimmed summaries. Do not load
+the linear and nonlinear simulation modules into the same environment.
+
+1. Prepare genotype inputs for the linear simulations
+-----------------------------------------------------
+Hapgen2 genotype data reference from the original workflow:
+https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/COXHAP
+
+Place EUR_chr22, AFR_chr22, and SAS_chr22 BED/BIM inputs and the required
+MR_LDL_joint_2013.txt GWAS file in Simulation/Nonlinear-Sim/, or edit the
+paths in Hapgen-prePro.R. Its genotype reader assumes 120,000 samples per
+population; align that setting with the supplied files.
+
+  source("Simulation/Nonlinear-Sim/Hapgen-prePro.R", chdir = TRUE)
+
+This writes SimData_EU.Rdata, SimData_AF.Rdata, and SimData_SA.Rdata beside
+the script. Copy the EU and AF files into Simulation/Linear-Sim/, or update
+the two load() paths in each linear notebook. The linear generator expects
+2,000 matched genotype columns in G_eu and G_af, using the first 100 in the
+exposure models.
+
+Despite its directory, Hapgen-prePro.R supplies the linear genotype inputs.
+The current nonlinear generator draws Gaussian instruments and covariates
+internally and does not load the Hapgen files.
+
+2. Linear simulations (Section 5.1)
+----------------------------------
+Run all five GenoSim-h=x.Rmd notebooks, one at a time in fresh R sessions.
+For each session, start in Code/ and select the corresponding filename:
+
+  rmarkdown::render("Simulation/Linear-Sim/GenoSim-h=0.Rmd")
+  rmarkdown::render("Simulation/Linear-Sim/GenoSim-h=0.75.Rmd")
+  rmarkdown::render("Simulation/Linear-Sim/GenoSim-h=0.5.Rmd")
+  rmarkdown::render("Simulation/Linear-Sim/GenoSim-h=0.25.Rmd")
+  rmarkdown::render("Simulation/Linear-Sim/GenoSim-h=1.Rmd")
+
+They source R/model_functions.R and R/linear_simulation_functions.R and
+perform 200 replicates, with 350 target observations per fold and 20,000
+observations per source sample. Windows runs mclapply sequentially; other
+systems retain 20 workers. The original scenario mapping is preserved:
+
+  Notebook h    near_weight    Raw output                 IV input
+  0             1              model_results_1.Rdata      linear_1.Rdata
+  0.75          0.75           model_results_2.Rdata      linear_2.Rdata
+  0.5           0.5            model_results_3.Rdata      linear_3.Rdata
+  0.25          0.25           model_results_4.Rdata      linear_4.Rdata
+  1             0              model_results_5.Rdata      linear_5.Rdata
+
+near_weight multiplies beta_Z_near; the far-source multiplier is 1 -
+near_weight. The endpoint notebook labels use the historical mapping above.
+Do not infer near_weight solely from the h in a filename.
+
+After all five notebooks finish, convert their outputs:
+
+  source("Simulation/Linear-Sim/Prepare-Linear-Results.R", chdir = TRUE)
+
+This replaces the old commented-out conversion. It checks for 200 replicates,
+extracts each replicate's data/prediction list, renames the nine prediction
+fields, and saves Results1 through Results5 in linear_1.Rdata through
+linear_5.Rdata. Incomplete replicates produce an error instead of silently
+changing the alignment between scenarios.
+
+Then run the analyses for Figure 3, Figure 4, and Supplementary Figure S3:
+
+  source("Simulation/Linear-Sim/Linear-sim_Target_Transfer.R", chdir = TRUE)
+  source("Simulation/Linear-Sim/Linear-sim_MM_CF.R", chdir = TRUE)
+  source("Simulation/Linear-Sim/Illustrative Example.R", chdir = TRUE)
+
+The MM_CF script defaults to mod = "M7"; use "M4" for its reduced instrument
+set. Retain the same setting when comparing versions. Figure PDFs are saved
+in Simulation/Linear-Sim/.
+
+3. Nonlinear simulations (Section 5.2)
+-------------------------------------
+This branch does not require section 1 or the linear outputs. Configure the
+R keras/TensorFlow backend and the other nonlinear dependencies, then run:
+
+  rmarkdown::render("Simulation/Nonlinear-Sim/Gen-Nonlinear.Rmd")
+
+The notebook sources R/model_functions.R and
+R/nonlinear_simulation_functions.R. It generates Gaussian inputs, fits the
+source/target/transfer models, and runs replicate_ids = 1:200. Generated
+results are saved directly, without reloading the old dated checkpoints:
+
+  nonlinear_new.Rdata
+    Contains Results_list_best_new_med for the IV analyses.
+  model_evaluation_results_nonlinear.csv
+    Contains model-evaluation summaries.
+
+Both files are written in Simulation/Nonlinear-Sim/. The old notebook ran
+171:200 and reloaded dated checkpoints near its end; this is now a fresh
+1:200 run. To compare against an old checkpoint, use matching replicate data
+and fitted predictions. A new full run cannot be assumed to reproduce that
+checkpoint. The notebook does not set an explicit random seed.
+
+A shortened trial run can check the neural-network setup, but its outputs
+are not sufficient for the downstream scripts, which expect 200 replicates.
+
+Run the analyses for Figure 5 and Supplementary Figure S2:
+
+  source("Simulation/Nonlinear-Sim/Nonlinear-sim_Target_Transfer.R", chdir = TRUE)
+  source("Simulation/Nonlinear-Sim/Nonlinear-sim_MM_CF.R", chdir = TRUE)
+
+The MM_CF script defaults to mod = "M11"; use "M3" for its reduced instrument
+set. Retain the same setting when comparing versions. PDFs are saved beside
+the scripts.
+
+4. Debiasing simulation
+----------------------
+This simulation generates its own inputs:
+
+  source("Simulation/Sim_Debias.R", chdir = TRUE)
+
+It sources R/iv_functions.R, runs 1,000 replicates for each rho setting,
+and saves Res_debiased.Rdata and the Supplementary Figure S1 PDFs in
+Simulation/. IV simulation scripts use 20 PSOCK workers by default;
+adjust makeCluster(20) to available resources. Each worker loads the helpers.
+
+5. Real-data analyses
+---------------------
+UK Biobank data are not distributed here. Obtain authorized phenotype,
+genotype, and GWAS inputs and update their paths in the preprocessing scripts.
+Run each target-population configuration through all three stages:
+
+  LDL-CAD-Prepro.R -> LDL-CAD-SourceModel-LASSO.R -> LDL-CAD-Transfer&Target.R
+  BMI-SBP-Prepro.R -> BMI-SBP-SourceModel-LASSO.R -> BMI-SBP-Transfer&Target.R
+
+Use the hyphenated directories RealData/LDL-CAD/ and RealData/BMI-SBP/.
+For example, after aligning the population settings:
+
+  source("RealData/LDL-CAD/LDL-CAD-Prepro.R", chdir = TRUE)
+  source("RealData/LDL-CAD/LDL-CAD-SourceModel-LASSO.R", chdir = TRUE)
+  source("RealData/LDL-CAD/LDL-CAD-Transfer&Target.R", chdir = TRUE)
+
+The files retain the original example population settings. These do not yet
+form a consistent chain; select a target population before running them:
+
+  Analysis    Preprocessing/source selection    Target-estimation input
+  LDL-CAD     AFR                               SAS
+  BMI-SBP     SAS                               AFR
+
+  LDL preprocessing/source fitting use AFR variant selection and produce
+  source_lasso_EUR_AFR.Rdata and source_lasso_SAS_AFR.Rdata. Target estimation
+  uses SAS inputs and expects source_lasso_EUR_SAS.Rdata and
+  source_lasso_AFR_SAS.Rdata.
+
+  BMI preprocessing/source fitting use SAS variant selection and produce
+  source_lasso_EUR_SAS.Rdata and source_lasso_AFR_SAS.Rdata. Target estimation
+  uses AFR inputs and expects source_lasso_EUR_AFR.Rdata and
+  source_lasso_SAS_AFR.Rdata.
+
+Choose the target population and align the GWAS/genotype selection, phenotype
+CSVs, p-value/beta CSVs, source-model training CSVs, and model output/input
+filenames across all three scripts. Source model columns must match target
+predictor columns in order; renaming models from another variant set is not
+sufficient. Repeat the aligned configurations needed for Tables 1 and 2.
+
+LDL preprocessing also reads the CAD ICD phenotype file. Its phenotype path
+is ../../../ukbb_pheno.Rdata, while BMI preprocessing uses
+../../ukbb_pheno.Rdata; point both at the intended local phenotype file.
+
+Source fitting and target estimation source R/model_functions.R; target
+estimation also sources R/iv_functions.R. The current target configurations
+save Res_LDL_SAS.Rdata and Res_BMI_AFR.Rdata, respectively. Each Res matrix
+contains estimates, standard errors, p-values, confidence limits, and IV
+strength for the target, source, transfer, and combined estimators.
+
+For BMI-SBP, after aligning its settings, the equivalent commands are:
+
+  source("RealData/BMI-SBP/BMI-SBP-Prepro.R", chdir = TRUE)
+  source("RealData/BMI-SBP/BMI-SBP-SourceModel-LASSO.R", chdir = TRUE)
+  source("RealData/BMI-SBP/BMI-SBP-Transfer&Target.R", chdir = TRUE)
